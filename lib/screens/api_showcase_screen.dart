@@ -15,20 +15,39 @@ class ApiShowcaseScreen extends StatefulWidget {
 }
 
 class _ApiShowcaseScreenState extends State<ApiShowcaseScreen> {
-  final _cityController = TextEditingController(text: 'Hyderabad');
+  final _cityController = TextEditingController();
   final _weatherService = WeatherService();
   final _placeService = PlaceService();
   final _imageService = ImageService();
   final _storageService = StorageService();
+  final PageController _pageController = PageController();
 
+  String _userName = '';
   bool _isLoading = false;
   bool _isSaving = false;
-  String _status = 'Ready to search';
+  String _status = '';
+  bool _placesError = false;
+  String _placesErrorMessage = '';
+  int _currentImageIndex = 0;
   
-  // Results
   Weather? _weather;
   List<Place> _places = [];
   List<String> _images = [];
+
+  final List<String> _popularCities = ['Mumbai', 'Delhi', 'Bangalore', 'Hyderabad'];
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUserName();
+  }
+
+  Future<void> _loadUserName() async {
+    final name = await _storageService.getUserName();
+    setState(() {
+      _userName = name ?? 'Traveler';
+    });
+  }
 
   Future<void> _search() async {
     final city = _cityController.text.trim();
@@ -36,35 +55,42 @@ class _ApiShowcaseScreenState extends State<ApiShowcaseScreen> {
 
     setState(() {
       _isLoading = true;
-      _status = 'Fetching data for $city...';
+      _status = 'Loading...';
       _weather = null;
       _places = [];
       _images = [];
+      _placesError = false;
+      _placesErrorMessage = '';
+      _currentImageIndex = 0;
     });
 
     try {
-      // 1. Fetch Weather
-      setState(() => _status = 'Fetching Weather (OpenWeatherMap)...');
       final weather = await _weatherService.getWeatherByCity(city);
-      
-      // 2. Fetch Places
-      setState(() => _status = 'Fetching Places (OpenTripMap/Overpass)...');
-      final places = await _placeService.getPlacesByCity(city);
-
-      // 3. Fetch Images
-      setState(() => _status = 'Fetching Images (Unsplash)...');
       final images = await _imageService.searchImages('$city tourism', perPage: 6);
+      
+      List<Place> places = [];
+      try {
+        places = await _placeService.getPlacesByCity(city);
+      } catch (e) {
+        debugPrint('[UI] Places error: $e');
+        setState(() {
+          _placesError = true;
+          _placesErrorMessage = e.toString().replaceAll('Exception: ', '');
+        });
+      }
 
       setState(() {
         _weather = weather;
-        _places = places;
+        if (!_placesError) {
+          _places = places;
+        }
         _images = images;
-        _status = 'Data loaded successfully!';
+        _status = '';
         _isLoading = false;
       });
     } catch (e) {
       setState(() {
-        _status = 'Error: $e';
+        _status = 'Error loading data';
         _isLoading = false;
       });
     }
@@ -73,7 +99,7 @@ class _ApiShowcaseScreenState extends State<ApiShowcaseScreen> {
   Future<void> _saveTrip() async {
     if (_weather == null || _places.isEmpty) {
       ScaffoldMessenger.of(context).showSnackBar(
-        const SnackBar(content: Text('Please search for a city first!')),
+        const SnackBar(content: Text('Please search for a city first')),
       );
       return;
     }
@@ -90,211 +116,470 @@ class _ApiShowcaseScreenState extends State<ApiShowcaseScreen> {
     );
 
     final success = await _storageService.saveTrip(trip);
-
     setState(() => _isSaving = false);
 
-    if (success) {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          SnackBar(
-            content: Text('Trip to ${trip.city} saved!'),
-            backgroundColor: Colors.green,
-          ),
-        );
-      }
-    } else {
-      if (mounted) {
-        ScaffoldMessenger.of(context).showSnackBar(
-          const SnackBar(
-            content: Text('Failed to save trip'),
-            backgroundColor: Colors.red,
-          ),
-        );
-      }
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(success ? 'Trip saved successfully' : 'Failed to save trip'),
+          backgroundColor: success ? Colors.black : Colors.red,
+        ),
+      );
     }
   }
 
   @override
   Widget build(BuildContext context) {
     return Scaffold(
+      backgroundColor: Colors.white,
       appBar: AppBar(
-        title: const Text('Search Destinations'),
-        backgroundColor: Colors.teal,
-        foregroundColor: Colors.white,
-        actions: [
-          if (_weather != null && _places.isNotEmpty)
-            IconButton(
+        title: const Text('Discover'),
+        elevation: 0,
+      ),
+      body: Column(
+        children: [
+          _buildHeader(),
+          Expanded(
+            child: SingleChildScrollView(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: [
+                  if (_images.isNotEmpty) _buildImagesSection(),
+                  if (_weather != null) _buildWeatherSection(),
+                  if (_placesError || _places.isNotEmpty) _buildPlacesSection(),
+                  if (_weather == null && _places.isEmpty && !_isLoading && !_placesError)
+                    _buildEmptyState(),
+                  const SizedBox(height: 80),
+                ],
+              ),
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildHeader() {
+    return Container(
+      color: Colors.white,
+      padding: const EdgeInsets.all(20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          Text(
+            'Hi, $_userName',
+            style: const TextStyle(
+              fontSize: 28,
+              fontWeight: FontWeight.bold,
+              color: Colors.black,
+            ),
+          ),
+          const SizedBox(height: 4),
+          Text(
+            'Where do you want to go?',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey[600],
+            ),
+          ),
+          const SizedBox(height: 20),
+          Row(
+            children: [
+              Expanded(
+                child: TextField(
+                  controller: _cityController,
+                  decoration: InputDecoration(
+                    hintText: 'Search city',
+                    prefixIcon: Icon(Icons.search, color: Colors.grey[600]),
+                    suffixIcon: _cityController.text.isNotEmpty
+                        ? IconButton(
+                            icon: const Icon(Icons.clear),
+                            onPressed: () {
+                              setState(() {
+                                _cityController.clear();
+                                _weather = null;
+                                _places = [];
+                                _images = [];
+                              });
+                            },
+                          )
+                        : null,
+                  ),
+                  onSubmitted: (_) => _search(),
+                  onChanged: (_) => setState(() {}),
+                ),
+              ),
+              const SizedBox(width: 12),
+              ElevatedButton(
+                onPressed: _isLoading ? null : _search,
+                style: ElevatedButton.styleFrom(
+                  padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 18),
+                ),
+                child: _isLoading
+                    ? const SizedBox(
+                        width: 20,
+                        height: 20,
+                        child: CircularProgressIndicator(
+                          strokeWidth: 2,
+                          color: Colors.white,
+                        ),
+                      )
+                    : const Text('Search'),
+              ),
+            ],
+          ),
+          if (_status.isNotEmpty) ...[
+            const SizedBox(height: 12),
+            Text(
+              _status,
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+                fontStyle: FontStyle.italic,
+              ),
+            ),
+          ],
+          const SizedBox(height: 16),
+          Wrap(
+            spacing: 8,
+            children: _popularCities.map((city) {
+              return InkWell(
+                onTap: () {
+                  setState(() {
+                    _cityController.text = city;
+                  });
+                  _search();
+                },
+                child: Chip(
+                  label: Text(city),
+                  backgroundColor: Colors.grey[100],
+                  side: BorderSide(color: Colors.grey[300]!),
+                  labelStyle: const TextStyle(fontSize: 14),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildImagesSection() {
+    return Container(
+      color: Colors.black,
+      height: 240,
+      child: Stack(
+        children: [
+          PageView.builder(
+            controller: _pageController,
+            itemCount: _images.length,
+            onPageChanged: (index) {
+              setState(() {
+                _currentImageIndex = index;
+              });
+            },
+            itemBuilder: (context, index) {
+              return Image.network(
+                _images[index],
+                fit: BoxFit.cover,
+                errorBuilder: (context, error, stack) => Container(
+                  color: Colors.grey[900],
+                  child: const Center(
+                    child: Icon(Icons.image, size: 48, color: Colors.white54),
+                  ),
+                ),
+              );
+            },
+          ),
+          // Page indicators
+          if (_images.length > 1)
+            Positioned(
+              bottom: 50,
+              left: 0,
+              right: 0,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.center,
+                children: List.generate(
+                  _images.length,
+                  (index) => Container(
+                    margin: const EdgeInsets.symmetric(horizontal: 3),
+                    width: 6,
+                    height: 6,
+                    decoration: BoxDecoration(
+                      shape: BoxShape.circle,
+                      color: _currentImageIndex == index
+                          ? Colors.white
+                          : Colors.white.withValues(alpha: 0.4),
+                    ),
+                  ),
+                ),
+              ),
+            ),
+          Positioned(
+            bottom: 16,
+            right: 16,
+            child: ElevatedButton.icon(
+              onPressed: _isSaving ? null : _saveTrip,
               icon: _isSaving
                   ? const SizedBox(
-                      width: 20,
-                      height: 20,
+                      width: 16,
+                      height: 16,
                       child: CircularProgressIndicator(
                         strokeWidth: 2,
                         color: Colors.white,
                       ),
                     )
-                  : const Icon(Icons.bookmark_add),
-              onPressed: _isSaving ? null : _saveTrip,
-              tooltip: 'Save Trip',
+                  : const Icon(Icons.bookmark_border, size: 18),
+              label: const Text('Save'),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.white,
+                foregroundColor: Colors.black,
+              ),
             ),
+          ),
         ],
       ),
-      body: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Column(
-          children: [
-            // Search Section
-            Row(
-              children: [
-                Expanded(
-                  child: TextField(
-                    controller: _cityController,
-                    decoration: const InputDecoration(
-                      labelText: 'Enter City Name',
-                      border: OutlineInputBorder(),
-                      prefixIcon: Icon(Icons.search),
+    );
+  }
+
+  Widget _buildWeatherSection() {
+    return Container(
+      margin: const EdgeInsets.all(20),
+      padding: const EdgeInsets.all(20),
+      decoration: BoxDecoration(
+        border: Border.all(color: Colors.grey[300]!),
+        borderRadius: BorderRadius.circular(12),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          const Text(
+            'Weather',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    '${_weather!.temperature.toStringAsFixed(1)}°C',
+                    style: const TextStyle(
+                      fontSize: 40,
+                      fontWeight: FontWeight.bold,
                     ),
                   ),
-                ),
-                const SizedBox(width: 16),
-                ElevatedButton(
-                  onPressed: _isLoading ? null : _search,
-                  style: ElevatedButton.styleFrom(
-                    backgroundColor: Colors.teal,
-                    foregroundColor: Colors.white,
-                    padding: const EdgeInsets.symmetric(horizontal: 24, vertical: 16),
+                  Text(
+                    _weather!.description,
+                    style: TextStyle(
+                      fontSize: 16,
+                      color: Colors.grey[600],
+                    ),
                   ),
-                  child: _isLoading 
-                    ? const SizedBox(width: 20, height: 20, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                    : const Text('SEARCH'),
-                ),
-              ],
+                ],
+              ),
+              Column(
+                crossAxisAlignment: CrossAxisAlignment.end,
+                children: [
+                  Text('Humidity: ${_weather!.humidity.toInt()}%'),
+                  const SizedBox(height: 4),
+                  Text('Wind: ${_weather!.windSpeed.toStringAsFixed(1)} m/s'),
+                ],
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildPlacesSection() {
+    if (_placesError) {
+      return Container(
+        margin: const EdgeInsets.all(20),
+        padding: const EdgeInsets.all(24),
+        decoration: BoxDecoration(
+          border: Border.all(color: Colors.grey[300]!),
+          borderRadius: BorderRadius.circular(12),
+        ),
+        child: Column(
+          children: [
+            const Icon(
+              Icons.error_outline,
+              size: 48,
+              color: Colors.black54,
+            ),
+            const SizedBox(height: 16),
+            const Text(
+              'Something went wrong',
+              style: TextStyle(
+                fontSize: 18,
+                fontWeight: FontWeight.bold,
+              ),
             ),
             const SizedBox(height: 8),
-            Text(_status, style: TextStyle(color: Colors.grey[600], fontStyle: FontStyle.italic)),
-            const SizedBox(height: 16),
-
-            // Results Section
-            Expanded(
-              child: SingleChildScrollView(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.stretch,
-                  children: [
-                    // 1. Weather Section
-                    _buildSectionHeader('1. OpenWeatherMap (Weather)', Icons.cloud),
-                    _buildWeatherCard(),
-                    const SizedBox(height: 20),
-
-                    // 2. Places Section
-                    _buildSectionHeader('2. OpenTripMap / Overpass (Places)', Icons.place),
-                    _buildPlacesList(),
-                    const SizedBox(height: 20),
-
-                    // 3. Images Section
-                    _buildSectionHeader('3. Unsplash (Images)', Icons.image),
-                    _buildImagesGrid(),
-                  ],
+            Text(
+              'Could not load places',
+              style: TextStyle(
+                fontSize: 14,
+                color: Colors.grey[600],
+              ),
+            ),
+            const SizedBox(height: 4),
+            Text(
+              _placesErrorMessage,
+              style: TextStyle(
+                fontSize: 12,
+                color: Colors.grey[500],
+              ),
+              textAlign: TextAlign.center,
+            ),
+            const SizedBox(height: 24),
+            ElevatedButton.icon(
+              onPressed: _search,
+              icon: const Icon(Icons.refresh, color: Colors.white),
+              label: const Text(
+                'Try Again',
+                style: TextStyle(color: Colors.white),
+              ),
+              style: ElevatedButton.styleFrom(
+                backgroundColor: Colors.black,
+                padding: const EdgeInsets.symmetric(
+                  horizontal: 32,
+                  vertical: 16,
+                ),
+                shape: RoundedRectangleBorder(
+                  borderRadius: BorderRadius.circular(8),
                 ),
               ),
             ),
           ],
         ),
-      ),
-    );
-  }
-
-  Widget _buildSectionHeader(String title, IconData icon) {
-    return Padding(
-      padding: const EdgeInsets.only(bottom: 8.0),
-      child: Row(
+      );
+    }
+    
+    return Container(
+      margin: const EdgeInsets.symmetric(horizontal: 20),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          Icon(icon, color: Colors.teal),
-          const SizedBox(width: 8),
-          Text(title, style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold)),
+          const Text(
+            'Places to Visit',
+            style: TextStyle(
+              fontSize: 18,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+          const SizedBox(height: 16),
+          ListView.builder(
+            shrinkWrap: true,
+            physics: const NeverScrollableScrollPhysics(),
+            itemCount: _places.length,
+            itemBuilder: (context, index) {
+              final place = _places[index];
+              return Container(
+                margin: const EdgeInsets.only(bottom: 12),
+                padding: const EdgeInsets.all(16),
+                decoration: BoxDecoration(
+                  border: Border.all(color: Colors.grey[300]!),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Container(
+                      width: 40,
+                      height: 40,
+                      decoration: BoxDecoration(
+                        color: Colors.black,
+                        borderRadius: BorderRadius.circular(8),
+                      ),
+                      child: Center(
+                        child: Text(
+                          '${index + 1}',
+                          style: const TextStyle(
+                            color: Colors.white,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 16,
+                          ),
+                        ),
+                      ),
+                    ),
+                    const SizedBox(width: 16),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            place.name,
+                            style: const TextStyle(
+                              fontSize: 16,
+                              fontWeight: FontWeight.w600,
+                            ),
+                          ),
+                          const SizedBox(height: 4),
+                          Text(
+                            place.category,
+                            style: TextStyle(
+                              fontSize: 14,
+                              color: Colors.grey[600],
+                            ),
+                          ),
+                          if (place.description != null &&
+                              place.description!.isNotEmpty) ...[
+                            const SizedBox(height: 8),
+                            Text(
+                              place.description!,
+                              style: TextStyle(
+                                fontSize: 13,
+                                color: Colors.grey[700],
+                              ),
+                              maxLines: 2,
+                              overflow: TextOverflow.ellipsis,
+                            ),
+                          ],
+                        ],
+                      ),
+                    ),
+                  ],
+                ),
+              );
+            },
+          ),
         ],
       ),
     );
   }
 
-  Widget _buildWeatherCard() {
-    if (_weather == null) {
-      return const Card(child: Padding(padding: EdgeInsets.all(16), child: Text('No weather data')));
-    }
-    return Card(
-      color: Colors.blue.shade50,
-      child: Padding(
-        padding: const EdgeInsets.all(16.0),
-        child: Row(
-          mainAxisAlignment: MainAxisAlignment.spaceAround,
-          children: [
-            Column(
-              children: [
-                Text('${_weather!.temperature.toStringAsFixed(1)}°C', style: const TextStyle(fontSize: 32, fontWeight: FontWeight.bold)),
-                Text(_weather!.description, style: const TextStyle(fontSize: 16)),
-              ],
+  Widget _buildEmptyState() {
+    return Container(
+      padding: const EdgeInsets.all(40),
+      child: Column(
+        children: [
+          Icon(Icons.travel_explore, size: 80, color: Colors.grey[300]),
+          const SizedBox(height: 16),
+          Text(
+            'Search for a city to start planning',
+            style: TextStyle(
+              fontSize: 16,
+              color: Colors.grey[600],
             ),
-            Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                Text('Humidity: ${_weather!.humidity}%'),
-                Text('Wind: ${_weather!.windSpeed} m/s'),
-              ],
-            ),
-          ],
-        ),
-      ),
-    );
-  }
-
-  Widget _buildPlacesList() {
-    if (_places.isEmpty) {
-      return const Card(child: Padding(padding: EdgeInsets.all(16), child: Text('No places found')));
-    }
-    return Card(
-      child: ListView.separated(
-        shrinkWrap: true,
-        physics: const NeverScrollableScrollPhysics(),
-        itemCount: _places.length,
-        separatorBuilder: (ctx, i) => const Divider(height: 1),
-        itemBuilder: (ctx, i) {
-          final place = _places[i];
-          return ListTile(
-            leading: CircleAvatar(
-              backgroundColor: Colors.teal.shade100,
-              child: Text('${i + 1}'),
-            ),
-            title: Text(place.name, style: const TextStyle(fontWeight: FontWeight.bold)),
-            subtitle: Text(place.category),
-            trailing: const Icon(Icons.arrow_forward_ios, size: 16),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildImagesGrid() {
-    if (_images.isEmpty) {
-      return const Card(child: Padding(padding: EdgeInsets.all(16), child: Text('No images found')));
-    }
-    return GridView.builder(
-      shrinkWrap: true,
-      physics: const NeverScrollableScrollPhysics(),
-      gridDelegate: const SliverGridDelegateWithFixedCrossAxisCount(
-        crossAxisCount: 3,
-        crossAxisSpacing: 8,
-        mainAxisSpacing: 8,
-      ),
-      itemCount: _images.length,
-      itemBuilder: (ctx, i) {
-        return ClipRRect(
-          borderRadius: BorderRadius.circular(8),
-          child: Image.network(
-            _images[i],
-            fit: BoxFit.cover,
-            errorBuilder: (ctx, err, stack) => const Center(child: Icon(Icons.error)),
+            textAlign: TextAlign.center,
           ),
-        );
-      },
+        ],
+      ),
     );
+  }
+
+  @override
+  void dispose() {
+    _cityController.dispose();
+    _pageController.dispose();
+    super.dispose();
   }
 }

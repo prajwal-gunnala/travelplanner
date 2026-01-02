@@ -23,7 +23,7 @@ class PlaceService {
       );
 
       debugPrint('[PlaceService] Getting coordinates for: $city');
-      final response = await http.get(url);
+      final response = await http.get(url).timeout(const Duration(seconds: 10));
 
       if (response.statusCode == 200) {
         final List<dynamic> data = json.decode(response.body);
@@ -48,22 +48,16 @@ class PlaceService {
     required String country,
     required double lat,
     required double lon,
-    int radiusMeters = 10000,
-    int limit = 20,
+    int radiusMeters = 5000,
+    int limit = 10,
   }) async {
     try {
-      // Overpass query for tourist attractions
+      // Simplified Overpass query for better performance
       final query = '''
-[out:json][timeout:25];
+[out:json][timeout:15];
 (
-  node["tourism"="attraction"](around:$radiusMeters,$lat,$lon);
-  node["tourism"="museum"](around:$radiusMeters,$lat,$lon);
-  node["tourism"="viewpoint"](around:$radiusMeters,$lat,$lon);
-  node["historic"](around:$radiusMeters,$lat,$lon);
-  node["amenity"="place_of_worship"](around:$radiusMeters,$lat,$lon);
-  way["tourism"="attraction"](around:$radiusMeters,$lat,$lon);
-  way["tourism"="museum"](around:$radiusMeters,$lat,$lon);
-  way["historic"](around:$radiusMeters,$lat,$lon);
+  node["tourism"](around:$radiusMeters,$lat,$lon);
+  way["tourism"](around:$radiusMeters,$lat,$lon);
 );
 out center $limit;
 ''';
@@ -73,11 +67,11 @@ out center $limit;
         _overpassUrl,
         headers: {'Content-Type': 'application/x-www-form-urlencoded'},
         body: {'data': query},
-      );
+      ).timeout(const Duration(seconds: 30));
 
       if (response.statusCode != 200) {
         debugPrint('[PlaceService] Overpass error: ${response.statusCode}');
-        return [];
+        throw Exception('Places service returned status ${response.statusCode}');
       }
 
       final data = json.decode(response.body);
@@ -116,13 +110,24 @@ out center $limit;
         );
       }
 
+      if (places.isEmpty) {
+        debugPrint('[PlaceService] No places found');
+        throw Exception('No places found in $city');
+      }
+
       debugPrint('[PlaceService] Returning ${places.length} places');
       return places;
+    } on http.ClientException catch (e) {
+      debugPrint('[PlaceService] Network error: $e');
+      throw Exception('Network error: Could not connect to places service');
     } catch (e) {
       debugPrint('[PlaceService] Overpass error: $e');
-      return [];
+      throw Exception('Failed to load places: $e');
     }
   }
+
+  /// Fallback places when API fails
+
 
   /// Extract coordinates from Overpass element
   (double, double)? _extractLatLon(Map<String, dynamic> element) {
@@ -167,7 +172,7 @@ out center $limit;
     final cityData = await _getCityCoordinates(city);
     if (cityData == null) {
       debugPrint('[PlaceService] Could not find coordinates for $city');
-      return [];
+      throw Exception('Could not find city: $city');
     }
 
     final places = await _getPlacesFromOverpass(

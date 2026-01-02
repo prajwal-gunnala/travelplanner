@@ -7,6 +7,33 @@ import '../models/trip.dart';
 
 class StorageService {
   static const String _tripsKey = 'saved_trips';
+  static const String _userNameKey = 'user_name';
+
+  /// Save user name
+  Future<bool> saveUserName(String name) async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return await prefs.setString(_userNameKey, name);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Get user name
+  Future<String?> getUserName() async {
+    try {
+      final prefs = await SharedPreferences.getInstance();
+      return prefs.getString(_userNameKey);
+    } catch (e) {
+      return null;
+    }
+  }
+
+  /// Check if user is logged in
+  Future<bool> isLoggedIn() async {
+    final name = await getUserName();
+    return name != null && name.isNotEmpty;
+  }
 
   /// Save a trip
   Future<bool> saveTrip(Trip trip) async {
